@@ -59,6 +59,15 @@ $ uv4 -r -j0 ble_app_uart_c/pca10056/s140/arm5_no_packs/ble_app_uart_c_pca10056_
 
 For any contribution, please kindly fork, change and send pull request.
 
+Please do NOT fork directly from master. Instead, please fork from development or document branches.
+  - For documentation, please fork from doc/0000_readme.
+  - For modifications on the central project ble\_app\_uart\_c, please fork from dev/0000\_Central.
+  - For modifications on the peripheral project ble\_app\_uart, please fork from dev/0001\_Peripheral.
+
+If there are any changes required to SDK files, please:
+  - Put all modifications in directory SDK.mod. Create the directory if it does not exist.
+  - Make a clean copy of the file from the SDK, commit and then make changes, in order for others to understand your modifications.
+
 License
 ----
 
