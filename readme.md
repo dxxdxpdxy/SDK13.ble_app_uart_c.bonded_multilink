@@ -1,7 +1,5 @@
 # ble\_app\_uart\_c example in Nordic nRF5 SDK 13.0.0, with bonded multi-link support
 
-[![N|Solid](http://www.nordicsemi.com/extension/nordic/design/bootnordic/images/NordicS_smarter-things.png)](http://www.nordicsemi.com/)
-
 This example is based on the central and peripheral example involving ble\_nus and ble\_nus\_c of Nordic nRF5 SDK 13.0.0. It consists of two projects:
 
   - ble\_app\_uart\_c, the central project which is modified to support multiple central connection with bonding.
