@@ -66,7 +66,7 @@
 #include "nrf_log_ctrl.h"
 
 
-#define CENTRAL_LINK_COUNT      1                                       /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
+#define CENTRAL_LINK_COUNT      2                                       /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
 #define PERIPHERAL_LINK_COUNT   0                                       /**< Number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
 #define CONN_CFG_TAG            1                                       /**< A tag that refers to the BLE stack configuration we set with @ref sd_ble_cfg_set. Default tag is @ref BLE_CONN_CFG_TAG_DEFAULT. */
 
@@ -107,7 +107,7 @@ static ble_nus_c_t              m_ble_nus_c[CENTRAL_LINK_COUNT];        /**< Ins
 static nrf_ble_gatt_t           m_gatt;                                 /**< GATT module instance. */
 static ble_db_discovery_t       m_ble_db_discovery[CENTRAL_LINK_COUNT]; /**< Instance of database discovery module. Must be passed to all db_discovert API calls */
 static ble_gap_scan_params_t    m_scan_params;                          /**< Scan parameters requested for scanning and connection. */
-static bool                     m_whitelist_disabled;                   /**< True if whitelist has been temporarily disabled. */
+static bool                     m_whitelist_disabled = true;            /**< True if whitelist has been temporarily disabled. */
 static bool                     m_memory_access_in_progress;            /**< Flag to keep track of ongoing operations on persistent memory. */
 static uint16_t                 m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - OPCODE_LENGTH - HANDLE_LENGTH; /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 
@@ -693,7 +693,6 @@ static void ble_nus_c_evt_handler(ble_nus_c_t * p_ble_nus_c, const ble_nus_c_evt
 
         case BLE_NUS_C_EVT_DISCONNECTED:
             NRF_LOG_INFO("Disconnected.\r\n");
-            scan_start();
             break;
     }
 }
@@ -809,6 +808,7 @@ static void on_ble_evt(ble_evt_t * p_ble_evt)
     ret_code_t            err_code;
     ble_db_discovery_t  * p_ble_db_discovery;
     const ble_gap_evt_t * p_gap_evt = &p_ble_evt->evt.gap_evt;
+    uint32_t              n_conn;
 
     switch (p_ble_evt->header.evt_id)
     {
@@ -853,7 +853,29 @@ static void on_ble_evt(ble_evt_t * p_ble_evt)
                 err_code = ble_db_discovery_start(p_ble_db_discovery, p_ble_evt->evt.gap_evt.conn_handle);
                 APP_ERROR_CHECK(err_code);
             }
+
+            n_conn = ble_conn_state_n_centrals();
+            if (n_conn < CENTRAL_LINK_COUNT)
+            {
+                // Resume scanning.
+                scan_start();
+            }
             break; // BLE_GAP_EVT_CONNECTED
+
+        case BLE_GAP_EVT_DISCONNECTED:
+            n_conn = ble_conn_state_n_centrals();
+            if (n_conn < CENTRAL_LINK_COUNT)
+            {
+                // Resume scanning.
+                scan_start();
+            }
+            
+            if (n_conn == 0)
+            {
+                err_code = bsp_indication_set(BSP_INDICATE_SCANNING);
+                APP_ERROR_CHECK(err_code);
+            }
+            break;
 
         case BLE_GAP_EVT_TIMEOUT:
             if (p_gap_evt->params.timeout.src == BLE_GAP_TIMEOUT_SRC_SCAN)
@@ -990,7 +1012,7 @@ static void ble_stack_init(void)
     memset(&ble_cfg, 0, sizeof(ble_cfg));
     ble_cfg.gap_cfg.role_count_cfg.periph_role_count  = PERIPHERAL_LINK_COUNT;
     ble_cfg.gap_cfg.role_count_cfg.central_role_count = CENTRAL_LINK_COUNT;
-    ble_cfg.gap_cfg.role_count_cfg.central_sec_count  = 1;
+    ble_cfg.gap_cfg.role_count_cfg.central_sec_count  = CENTRAL_LINK_COUNT; // Change this to 1 if pm_conn_secure() can be called sequentially.
     err_code = sd_ble_cfg_set(BLE_GAP_CFG_ROLE_COUNT, &ble_cfg, ram_start);
     APP_ERROR_CHECK(err_code);
 
@@ -1005,7 +1027,7 @@ static void ble_stack_init(void)
     memset(&ble_cfg, 0x00, sizeof(ble_cfg));
     ble_cfg.conn_cfg.conn_cfg_tag                     = CONN_CFG_TAG;
     ble_cfg.conn_cfg.params.gap_conn_cfg.event_length = 320;
-    ble_cfg.conn_cfg.params.gap_conn_cfg.conn_count   = BLE_GAP_CONN_COUNT_DEFAULT;
+    ble_cfg.conn_cfg.params.gap_conn_cfg.conn_count   = PERIPHERAL_LINK_COUNT + CENTRAL_LINK_COUNT;
     err_code = sd_ble_cfg_set(BLE_CONN_CFG_GAP, &ble_cfg, ram_start);
     APP_ERROR_CHECK(err_code);
 
@@ -1185,10 +1207,12 @@ static void nus_c_init(void)
 
     init.evt_handler = ble_nus_c_evt_handler;
 
-    for (uint8_t i = 0; i < CENTRAL_LINK_COUNT; i++)
+    err_code = ble_nus_c_init(&m_ble_nus_c[0], &init);
+    APP_ERROR_CHECK(err_code);
+
+    for (uint8_t i = 1; i < CENTRAL_LINK_COUNT; i++)
     {
-        err_code = ble_nus_c_init(&m_ble_nus_c[i], &init);
-        APP_ERROR_CHECK(err_code);
+        memcpy (&m_ble_nus_c[i], &m_ble_nus_c[0], sizeof(ble_nus_c_t));
     }
 }
 
