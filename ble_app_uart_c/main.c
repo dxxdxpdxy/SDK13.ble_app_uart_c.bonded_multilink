@@ -84,6 +84,8 @@
 #define SEC_PARAM_MIN_KEY_SIZE      7                                   /**< Minimum encryption key size in octets. */
 #define SEC_PARAM_MAX_KEY_SIZE      16                                  /**< Maximum encryption key size in octets. */
 
+#define REBOND_ON_REMOTE_KEY_LOSS   true                                /**< Rebond in case local key is lost. */
+
 #define SCAN_INTERVAL           0x00A0                                  /**< Determines scan interval in units of 0.625 millisecond. */
 #define SCAN_WINDOW             0x0050                                  /**< Determines scan window in units of 0.625 millisecond. */
 #define SCAN_TIMEOUT            0x0000                                  /**< Timout when scanning. 0x0000 disables timeout. */
@@ -331,14 +333,25 @@ static void pm_evt_handler(pm_evt_t const * p_evt)
              * Sometimes, it cannot be restarted until the link is disconnected and reconnected.
              * Sometimes it is impossible, to secure the link, or the peer device does not support it.
              * How to handle this error is highly application dependent. */
+
+            #if REBOND_ON_REMOTE_KEY_LOSS
+                if ((p_evt->params.conn_sec_failed.procedure == PM_LINK_SECURED_PROCEDURE_ENCRYPTION)
+                    && (p_evt->params.conn_sec_failed.error == PM_CONN_SEC_ERROR_PIN_OR_KEY_MISSING)
+                    && (p_evt->params.conn_sec_failed.error_src == BLE_GAP_SEC_STATUS_SOURCE_REMOTE))
+                {
+                    err_code = pm_conn_secure(p_evt->conn_handle, true);
+                    APP_ERROR_CHECK(err_code);
+                }
+            #endif
             break;
 
         case PM_EVT_CONN_SEC_CONFIG_REQ:
+        {
             // Reject pairing request from an already bonded peer.
             pm_conn_sec_config_t conn_sec_config = {.allow_repairing = false};
             pm_conn_sec_config_reply(p_evt->conn_handle, &conn_sec_config);
             break;
-
+        }
         case PM_EVT_STORAGE_FULL:
             // Run garbage collection on the flash.
             err_code = fds_gc();
