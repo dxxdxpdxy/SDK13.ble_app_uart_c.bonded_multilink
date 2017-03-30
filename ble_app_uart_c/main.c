@@ -103,9 +103,9 @@
 #define ECHOBACK_BLE_UART_DATA  1                                       /**< Echo the UART data that is received over the Nordic UART Service back to the sender. */
 
 
-static ble_nus_c_t              m_ble_nus_c;                            /**< Instance of NUS service. Must be passed to all NUS_C API calls. */
+static ble_nus_c_t              m_ble_nus_c[CENTRAL_LINK_COUNT];        /**< Instance of NUS service. Must be passed to all NUS_C API calls. */
 static nrf_ble_gatt_t           m_gatt;                                 /**< GATT module instance. */
-static ble_db_discovery_t       m_ble_db_discovery;                     /**< Instance of database discovery module. Must be passed to all db_discovert API calls */
+static ble_db_discovery_t       m_ble_db_discovery[CENTRAL_LINK_COUNT]; /**< Instance of database discovery module. Must be passed to all db_discovert API calls */
 static ble_gap_scan_params_t    m_scan_params;                          /**< Scan parameters requested for scanning and connection. */
 static bool                     m_whitelist_disabled;                   /**< True if whitelist has been temporarily disabled. */
 static bool                     m_memory_access_in_progress;            /**< Flag to keep track of ongoing operations on persistent memory. */
@@ -128,6 +128,152 @@ static ble_uuid_t const m_nus_uuid =
     .uuid = BLE_UUID_NUS_SERVICE,
     .type = NUS_SERVICE_UUID_TYPE
 };
+
+
+static uint8_t m_num_of_conn = 0;                                       /**< Number of active connections. */
+
+
+/**@brief Function for initializing multi_conn. */
+static void multi_conn_init (void)
+{
+    uint8_t i;
+
+    m_num_of_conn = 0;
+    memset(m_ble_db_discovery, 0, sizeof(m_ble_db_discovery));
+    memset(m_ble_nus_c, 0, sizeof(m_ble_nus_c));
+
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        m_ble_db_discovery[i].conn_handle = BLE_CONN_HANDLE_INVALID;
+        m_ble_nus_c[i].conn_handle        = BLE_CONN_HANDLE_INVALID;
+    }
+}
+
+
+/**@brief Function for adding connection handle to multi_conn. */
+static void multi_conn_add (uint16_t conn_handle)
+{
+    uint8_t i;
+    uint32_t err_code;
+
+    /* Check if there is already a duplicated copy of connection handle. */
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        if ((m_ble_db_discovery[i].conn_handle == conn_handle)
+            || (m_ble_nus_c[i].conn_handle == conn_handle))
+        {
+            return;
+        }
+    }
+
+    /* Find next empty. */
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        if ((m_ble_db_discovery[i].conn_handle == BLE_CONN_HANDLE_INVALID)
+            && (m_ble_nus_c[i].conn_handle == BLE_CONN_HANDLE_INVALID))
+        {
+            m_ble_db_discovery[i].conn_handle = conn_handle;
+            err_code = ble_nus_c_handles_assign(&m_ble_nus_c[i], conn_handle, NULL);
+            APP_ERROR_CHECK(err_code);
+            m_num_of_conn++;
+            break;
+        }
+    }
+}
+
+
+/**@brief Function for removing connection handle from multi_conn. */
+static void multi_conn_remove (uint16_t conn_handle)
+{
+    uint8_t i;
+
+    if (m_num_of_conn == 0)
+    {
+        return;
+    }
+
+    /* Check if connection handle exists in the queue. */
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        if (m_ble_db_discovery[i].conn_handle == conn_handle)
+        {
+            memset(&m_ble_db_discovery[i], 0, sizeof(ble_db_discovery_t));
+            m_ble_db_discovery[i].conn_handle = BLE_CONN_HANDLE_INVALID;
+            m_num_of_conn--;
+            return;
+        }
+    }
+}
+
+
+/**@brief Function for catching BLE_GAP_EVT_CONNECTED. */
+static void multi_conn_check_connected (ble_evt_t * p_ble_evt)
+{
+    if (p_ble_evt->header.evt_id == BLE_GAP_EVT_CONNECTED)
+    {
+        multi_conn_add(p_ble_evt->evt.gap_evt.conn_handle);
+    }
+}
+
+
+/**@brief Function for catching BLE_GAP_EVT_DISCONNECTED. */
+static void multi_conn_check_disconnected (ble_evt_t * p_ble_evt)
+{
+    if (p_ble_evt->header.evt_id == BLE_GAP_EVT_DISCONNECTED)
+    {
+        multi_conn_remove(p_ble_evt->evt.gap_evt.conn_handle);
+    }
+}
+
+
+/**< Function for finding the instance of m_ble_db_discovery. */
+static uint32_t multi_conn_get_ble_db_discovery (uint16_t conn_handle, ble_db_discovery_t **pp_ble_db_discovery)
+{
+    uint32_t ret = NRF_ERROR_NOT_FOUND;
+    uint8_t i;
+
+    if (m_num_of_conn == 0)
+    {
+        return ret;
+    }
+
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        if (conn_handle == m_ble_db_discovery[i].conn_handle)
+        {
+            *pp_ble_db_discovery = &m_ble_db_discovery[i];
+            ret = NRF_SUCCESS;
+            break;
+        }
+    }
+
+    return ret;
+}
+
+
+/**< Function for finding the instance of m_ble_nus_c. */
+static uint32_t multi_conn_get_ble_nus_c (uint16_t conn_handle, ble_nus_c_t **pp_ble_nus_c)
+{
+    uint32_t ret = NRF_ERROR_NOT_FOUND;
+    uint8_t i;
+
+    if (m_num_of_conn == 0)
+    {
+        return ret;
+    }
+
+    for (i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        if (conn_handle == m_ble_nus_c[i].conn_handle)
+        {
+            *pp_ble_nus_c = &m_ble_nus_c[i];
+            ret = NRF_SUCCESS;
+            break;
+        }
+    }
+
+    return ret;
+}
 
 
 /**@brief Function for asserts in the SoftDevice.
@@ -301,7 +447,12 @@ static void scan_start(void)
  */
 static void db_disc_handler(ble_db_discovery_evt_t * p_evt)
 {
-    ble_nus_c_on_db_disc_evt(&m_ble_nus_c, p_evt);
+    ble_nus_c_t *p_ble_nus_c;
+
+    if (NRF_SUCCESS == multi_conn_get_ble_nus_c(p_evt->conn_handle, &p_ble_nus_c))
+    {
+        ble_nus_c_on_db_disc_evt(p_ble_nus_c, p_evt);
+    }
 }
 
 
@@ -412,7 +563,7 @@ static void pm_evt_handler(pm_evt_t const * p_evt)
  * @details This function takes a list of characters of length data_len and prints the characters out on UART.
  *          If @ref ECHOBACK_BLE_UART_DATA is set, the data is sent back to sender.
  */
-static void ble_nus_chars_received_uart_print(uint8_t * p_data, uint16_t data_len)
+static void ble_nus_chars_received_uart_print(ble_nus_c_t * p_ble_nus_c, uint8_t * p_data, uint16_t data_len)
 {
     ret_code_t ret_val;
 
@@ -440,7 +591,7 @@ static void ble_nus_chars_received_uart_print(uint8_t * p_data, uint16_t data_le
         // Send data back to peripheral.
         do
         {
-            ret_val = ble_nus_c_string_send(&m_ble_nus_c, p_data, data_len);
+            ret_val = ble_nus_c_string_send(p_ble_nus_c, p_data, data_len);
             if ((ret_val != NRF_SUCCESS) && (ret_val != NRF_ERROR_BUSY))
             {
                 NRF_LOG_ERROR("Failed sending NUS message. Error 0x%x. \r\n", ret_val);
@@ -475,14 +626,17 @@ void uart_event_handle(app_uart_evt_t * p_event)
                 NRF_LOG_DEBUG("Ready to send data over BLE NUS\r\n");
                 NRF_LOG_HEXDUMP_DEBUG(data_array, index);
 
-                do
+                for (uint8_t i = 0; i < CENTRAL_LINK_COUNT; i++)
                 {
-                    ret_val = ble_nus_c_string_send(&m_ble_nus_c, data_array, index);
-                    if ( (ret_val != NRF_ERROR_INVALID_STATE) && (ret_val != NRF_ERROR_BUSY) )
+                    do
                     {
-                        APP_ERROR_CHECK(ret_val);
-                    }
-                } while (ret_val == NRF_ERROR_BUSY);
+                        ret_val = ble_nus_c_string_send(&m_ble_nus_c[i], data_array, index);
+                        if ( (ret_val != NRF_ERROR_INVALID_STATE) && (ret_val != NRF_ERROR_BUSY) )
+                        {
+                            APP_ERROR_CHECK(ret_val);
+                        }
+                    } while (ret_val == NRF_ERROR_BUSY);
+                }
 
                 index = 0;
             }
@@ -534,7 +688,7 @@ static void ble_nus_c_evt_handler(ble_nus_c_t * p_ble_nus_c, const ble_nus_c_evt
             break;
 
         case BLE_NUS_C_EVT_NUS_TX_EVT:
-            ble_nus_chars_received_uart_print(p_ble_nus_evt->p_data, p_ble_nus_evt->data_len);
+            ble_nus_chars_received_uart_print(p_ble_nus_c, p_ble_nus_evt->p_data, p_ble_nus_evt->data_len);
             break;
 
         case BLE_NUS_C_EVT_DISCONNECTED:
@@ -653,6 +807,7 @@ static bool is_uuid_present(ble_uuid_t               const * p_target_uuid,
 static void on_ble_evt(ble_evt_t * p_ble_evt)
 {
     ret_code_t            err_code;
+    ble_db_discovery_t  * p_ble_db_discovery;
     const ble_gap_evt_t * p_gap_evt = &p_ble_evt->evt.gap_evt;
 
     switch (p_ble_evt->header.evt_id)
@@ -688,15 +843,16 @@ static void on_ble_evt(ble_evt_t * p_ble_evt)
 
         case BLE_GAP_EVT_CONNECTED:
             NRF_LOG_INFO("Connected to target\r\n");
-            err_code = ble_nus_c_handles_assign(&m_ble_nus_c, p_ble_evt->evt.gap_evt.conn_handle, NULL);
-            APP_ERROR_CHECK(err_code);
 
             err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
             APP_ERROR_CHECK(err_code);
 
             // start discovery of services. The NUS Client waits for a discovery result
-            err_code = ble_db_discovery_start(&m_ble_db_discovery, p_ble_evt->evt.gap_evt.conn_handle);
-            APP_ERROR_CHECK(err_code);
+            if (NRF_SUCCESS == multi_conn_get_ble_db_discovery(p_ble_evt->evt.gap_evt.conn_handle, &p_ble_db_discovery))
+            {
+                err_code = ble_db_discovery_start(p_ble_db_discovery, p_ble_evt->evt.gap_evt.conn_handle);
+                APP_ERROR_CHECK(err_code);
+            }
             break; // BLE_GAP_EVT_CONNECTED
 
         case BLE_GAP_EVT_TIMEOUT:
@@ -774,13 +930,24 @@ static void on_sys_evt(uint32_t sys_evt)
  */
 static void ble_evt_dispatch(ble_evt_t * p_ble_evt)
 {
+    ble_db_discovery_t * p_ble_db_discovery;
+    ble_nus_c_t        * p_ble_nus_c;
+
+    multi_conn_check_connected(p_ble_evt);
     ble_conn_state_on_ble_evt(p_ble_evt);
     pm_on_ble_evt(p_ble_evt);
     on_ble_evt(p_ble_evt);
     bsp_btn_ble_on_ble_evt(p_ble_evt);
     nrf_ble_gatt_on_ble_evt(&m_gatt, p_ble_evt);
-    ble_db_discovery_on_ble_evt(&m_ble_db_discovery, p_ble_evt);
-    ble_nus_c_on_ble_evt(&m_ble_nus_c,p_ble_evt);
+    if (NRF_SUCCESS == multi_conn_get_ble_db_discovery(p_ble_evt->evt.gap_evt.conn_handle, &p_ble_db_discovery))
+    {
+        ble_db_discovery_on_ble_evt(p_ble_db_discovery, p_ble_evt);
+    }
+    if (NRF_SUCCESS == multi_conn_get_ble_nus_c(p_ble_evt->evt.gap_evt.conn_handle, &p_ble_nus_c))
+    {
+        ble_nus_c_on_ble_evt(p_ble_nus_c, p_ble_evt);
+    }
+    multi_conn_check_disconnected(p_ble_evt);
 }
 
 
@@ -964,11 +1131,14 @@ void bsp_event_handler(bsp_event_t event)
             break;
 
         case BSP_EVENT_DISCONNECT:
-            err_code = sd_ble_gap_disconnect(m_ble_nus_c.conn_handle,
-                                             BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-            if (err_code != NRF_ERROR_INVALID_STATE)
+            for (uint8_t i = 0; i < CENTRAL_LINK_COUNT; i++)
             {
-                APP_ERROR_CHECK(err_code);
+                err_code = sd_ble_gap_disconnect(m_ble_nus_c[i].conn_handle,
+                                                 BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+                if (err_code != NRF_ERROR_INVALID_STATE)
+                {
+                    APP_ERROR_CHECK(err_code);
+                }
             }
             break;
 
@@ -1015,8 +1185,11 @@ static void nus_c_init(void)
 
     init.evt_handler = ble_nus_c_evt_handler;
 
-    err_code = ble_nus_c_init(&m_ble_nus_c, &init);
-    APP_ERROR_CHECK(err_code);
+    for (uint8_t i = 0; i < CENTRAL_LINK_COUNT; i++)
+    {
+        err_code = ble_nus_c_init(&m_ble_nus_c[i], &init);
+        APP_ERROR_CHECK(err_code);
+    }
 }
 
 
@@ -1080,6 +1253,7 @@ int main(void)
     uart_init();
     log_init();
     buttons_leds_init(&erase_bonds);
+    multi_conn_init();
     db_discovery_init();
     ble_stack_init();
     gatt_init();
